@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>ATS Resume Pro</title>
+  <style>
+    :root{--bg:#0b0f14;--card:#0f1720;--muted:#9aa4b2;--accent:#6ee7b7;--glass:rgba(255,255,255,0.03);--glass-2:rgba(255,255,255,0.02);--error-bg:rgba(252,165,165,0.1);--error-border:rgba(248,113,113,0.3);--error-text:#fca5a5;--warn-bg:rgba(252,211,77,0.1);--warn-border:rgba(251,191,36,0.4);--warn-text:#fcd34d;}
+    html,body{height:100%;margin:0;background:linear-gradient(180deg,#05060a 0%, #081018 100%);color:#e6eef6; font-family: Inter, ui-sans-serif, system-ui;}
+    .wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
+    .card{width:920px;max-width:96vw;background:linear-gradient(180deg,rgba(255,255,255,0.02),transparent);border-radius:12px;padding:28px;box-shadow:0 8px 30px rgba(2,6,23,0.6);border:1px solid rgba(255,255,255,0.03)}
+    .center{display:flex;align-items:center;justify-content:center;flex-direction:column}
+    h1{margin:0;font-size:28px;letter-spacing:-0.4px}
+    .sub{color:var(--muted);margin-top:8px;font-size:13px; text-align: center;}
+    .welcome{height:180px;display:flex;align-items:center;justify-content:center;flex-direction:column}
+    .pulse{width:96px;height:96px;border-radius:20px;background:linear-gradient(135deg,rgba(110,231,183,0.12),rgba(110,231,183,0.06));display:flex;align-items:center;justify-content:center;box-shadow:0 6px 20px rgba(110,231,183,0.04);animation:pop 900ms ease both}
+    @keyframes pop{from{transform:scale(.92);opacity:0}to{transform:scale(1);opacity:1}}
+    .step{display:none;opacity:0;transform:translateY(8px);transition:all 360ms ease}
+    .step.active{display:block;opacity:1;transform:none}
+    textarea, input[type=file], .resume-text{width:100%;background:var(--glass);border:1px solid rgba(255,255,255,0.03);color:inherit;border-radius:8px;padding:12px;font-size:14px;box-sizing: border-box;}
+    .row{display:flex;gap:12px}
+    .col{flex:1}
+    .btn{background:linear-gradient(90deg,#10b981,#06b6d4);border:none;padding:10px 14px;border-radius:8px;color:#042018;font-weight:600;cursor:pointer; transition: opacity 200ms ease;}
+    .btn.ghost{background:transparent;color:var(--accent);border:1px solid rgba(110,231,183,0.12)}
+    .btn:disabled{opacity:0.5; cursor:not-allowed;}
+    .meta{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:13px}
+    .card-inner{margin-top:18px; width: 100%;}
+    .recommendations{background:var(--glass-2);padding:12px;border-radius:8px;border:1px solid rgba(255,255,255,0.02)}
+    .rec-item{padding:8px 6px;border-bottom:1px dashed rgba(255,255,255,0.02)}
+    .rec-item:last-child{border-bottom:none;}
+    .keywords{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+    .kw{background:rgba(255,255,255,0.03);padding:6px 8px;border-radius:999px;font-size:13px;color:var(--muted)}
+    .flex-between{display:flex;justify-content:space-between;align-items:center}
+    .small{font-size:13px;color:var(--muted)}
+    pre{white-space:pre-wrap;font-family:inherit;font-size:14px; background: var(--glass); padding: 12px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.04);}
+    .note{font-size:12px;color:var(--muted);margin-top:8px}
+    .loader-wrap{display:flex; align-items:center; gap: 8px; font-size: 13px; color: var(--muted); margin-top:8px; display: none;}
+    .loader{width:18px;height:18px;border-radius:50%;border:2px solid rgba(255,255,255,0.06);border-top-color:var(--accent);animation:spin 800ms linear infinite}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    footer{margin-top:16px;color:var(--muted);font-size:12px;text-align:center}
+    .error-box, .warn-box { padding: 12px; border-radius: 8px; margin-bottom: 16px; font-size: 14px; display: none; }
+    .error-box { background: var(--error-bg); border: 1px solid var(--error-border); color: var(--error-text); }
+    .warn-box { background: var(--warn-bg); border: 1px solid var(--warn-border); color: var(--warn-text); }
+    @media(max-width:640px){.card{padding:18px}}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div class="center">
+        <div id="welcome" class="welcome">
+          <div class="pulse"><svg width="48" height="48" viewBox="0 0 24 24" fill="none"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" fill="rgba(110,231,183,0.9)"/></svg></div>
+          <h1 id="toolTitle">Welcome to ATS Resume Pro</h1>
+          <div class="sub">A lightweight ATS-aware resume enhancer — fast, simple, dark UI</div>
+        </div>
+        <div id="globalErrorBox" class="error-box"></div>
+        {% if show_key_warning %}
+        <div class="warn-box" style="display: block;">Warning: API keys appear to be placeholders. Please set them as environment variables on your server.</div>
+        {% endif %}
+        <div id="step1" class="step active">
+          <div class="card-inner">
+            <div class="flex-between"><strong>Step 1 — Paste the Job Description</strong><span class="small">We use it to match keywords</span></div>
+            <div style="margin-top:8px"><textarea id="jobDesc" rows="8" placeholder="Paste the full job description here..."></textarea></div>
+            <div style="margin-top:10px" class="row">
+              <div class="col">
+                <label class="small">Upload Resume (PDF, DOCX, TXT)</label>
+                <input id="resumeFile" type="file" accept=".pdf,.doc,.docx,.txt" />
+              </div>
+              <div style="width:160px;display:flex;flex-direction:column;justify-content:flex-end;gap:8px">
+                 <button id="analyzeBtn" class="btn">Analyze</button>
+                <button id="resetBtn" class="btn ghost">Reset</button>
+              </div>
+            </div>
+            <div id="analyzeLoader" class="loader-wrap"><span class="loader"></span> Processing...</div>
+          </div>
+        </div>
+        <div id="step2" class="step">
+          <div class="card-inner" id="analysisCard">
+            <div class="flex-between"><strong>ATS Analysis</strong><div id="scoreBadge" class="small">Score: --</div></div>
+            <div id="justif" class="small" style="margin-top:8px;color:var(--muted)"></div>
+            <div style="margin-top:12px">
+              <strong>Recommendations</strong>
+              <div id="recs" class="recommendations" style="margin-top:8px"></div>
+            </div>
+            <div style="margin-top:12px">
+              <strong>Keywords</strong>
+              <div id="keywords" class="keywords"></div>
+            </div>
+            <div style="margin-top:14px" class="row">
+              <div class="col">
+                <button id="proceedBtn" class="btn">Proceed & Apply</button>
+              </div>
+              <div style="width:160px;display:flex;gap:8px;justify-content:flex-end">
+                <button id="backBtn" class="btn ghost">Back</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div id="step3" class="step">
+          <div class="card-inner">
+            <div class="flex-between"><strong>Optimized Resume</strong><span class="small">Plain text — copy & paste to your editor</span></div>
+            <div style="margin-top:10px"><textarea id="rewritten" class="resume-text" rows="18" placeholder="Rewritten resume will appear here..."></textarea></div>
+            <div style="margin-top:10px;display:flex;gap:8px;justify-content:flex-end">
+              <button id="copyBtn" class="btn ghost">Copy to Clipboard</button>
+              <button id="startOverBtn" class="btn">Start Over</button>
+            </div>
+            <div class="note">Note: Copy into Word or Google Docs for final formatting.</div>
+          </div>
+        </div>
+        <footer>Built with Groq Integration • Developed by Md. Mahfooz Khan</footer>
+      </div>
+    </div>
+  </div>
+  <script>
+    const step1 = document.getElementById('step1');
+    const step2 = document.getElementById('step2');
+    const step3 = document.getElementById('step3');
+    const analyzeBtn = document.getElementById('analyzeBtn');
+    const proceedBtn = document.getElementById('proceedBtn');
+    const backBtn = document.getElementById('backBtn');
+    const resetBtn = document.getElementById('resetBtn');
+    const startOverBtn = document.getElementById('startOverBtn');
+    const copyBtn = document.getElementById('copyBtn');
+    const jobDescEl = document.getElementById('jobDesc');
+    const resumeFileEl = document.getElementById('resumeFile');
+    const recsEl = document.getElementById('recs');
+    const keywordsEl = document.getElementById('keywords');
+    const scoreBadge = document.getElementById('scoreBadge');
+    const justifEl = document.getElementById('justif');
+    const rewrittenEl = document.getElementById('rewritten');
+    const analyzeLoader = document.getElementById('analyzeLoader');
+    const globalErrorBox = document.getElementById('globalErrorBox');
+    let latestResumeText = '';
+    let latestRecs = [];
+    let latestJobDesc = '';
+    function showError(message) {
+      globalErrorBox.textContent = 'Error: ' + message;
+      globalErrorBox.style.display = 'block';
+    }
+    function hideError() {
+      globalErrorBox.style.display = 'none';
+    }
+    function showStep(n){
+      [step1,step2,step3].forEach(s=>s.classList.remove('active'));
+      if(n===1) step1.classList.add('active');
+      if(n===2) step2.classList.add('active');
+      if(n===3) step3.classList.add('active');
+    }
+    function resetAll() {
+        jobDescEl.value = '';
+        resumeFileEl.value = '';
+        rewrittenEl.value = '';
+        scoreBadge.innerText = 'Score: --';
+        justifEl.innerText = '';
+        recsEl.innerHTML = '';
+        keywordsEl.innerHTML = '';
+        latestResumeText = '';
+        latestRecs = [];
+        latestJobDesc = '';
+        hideError();
+        showStep(1);
+    }
+    resetBtn.addEventListener('click', () => {
+        jobDescEl.value = '';
+        resumeFileEl.value = '';
+        hideError();
+    });
+    analyzeBtn.addEventListener('click', async () => {
+      hideError();
+      const jobDesc = jobDescEl.value.trim();
+      const file = resumeFileEl.files[0];
+      if(!jobDesc){ showError('Please paste the job description.'); return }
+      if(!file){ showError('Please upload your resume file.'); return }
+      analyzeLoader.style.display = 'flex';
+      analyzeBtn.disabled = true;
+      const fd = new FormData();
+      fd.append('job_desc', jobDesc);
+      fd.append('resume_file', file);
+      
+      try {
+        const res = await fetch('/api/analyze', {method:'POST', body:fd});
+        const data = await res.json();
+        if (!res.ok || data.error){
+            const errorMsg = data.error || `HTTP error! status: ${res.status}`;
+            showError(errorMsg);
+            if (data.raw) {
+                recsEl.innerHTML = '<h4>Raw AI Response:</h4><pre>' + data.raw + '</pre>';
+                showStep(2);
+            }
+            return;
+        }
+        const analysis = data.analysis || {};
+        scoreBadge.innerText = 'Score: ' + (analysis.score !== undefined ? analysis.score : '--');
+        justifEl.innerText = analysis.justification || '';
+        recsEl.innerHTML = '';
+        (analysis.recommendations||[]).forEach((r,idx) => {
+          const div = document.createElement('div');
+          div.className='rec-item';
+          div.innerText = (idx+1)+'. '+r;
+          recsEl.appendChild(div);
+        });
+        keywordsEl.innerHTML = '';
+        (analysis.keywords||[]).forEach(k => {
+          const s=document.createElement('div');
+          s.className='kw';
+          s.innerText=k;
+          keywordsEl.appendChild(s);
+        });
+        latestResumeText = data.resume_text || '';
+        latestRecs = analysis.recommendations || [];
+        latestJobDesc = jobDesc;
+        showStep(2);
+      } catch(err) {
+        console.error(err);
+        showError('A network or server error occurred. Check the console.');
+      } finally {
+        analyzeLoader.style.display = 'none';
+        analyzeBtn.disabled = false;
+      }
+    });
+    backBtn.addEventListener('click', () => showStep(1));
+    proceedBtn.addEventListener('click', async () => {
+      hideError();
+      if(!latestResumeText || !latestJobDesc){ showError('Missing data. Please analyze a resume first.'); return }
+      proceedBtn.disabled = true;
+      proceedBtn.innerText = 'Applying...';
+      rewrittenEl.value = '';
+      showStep(3);
+      const payload = {job_desc: latestJobDesc, resume_text: latestResumeText, recommendations: latestRecs};
+      try {
+        const response = await fetch('/api/rewrite', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(errorText || `HTTP error! status: ${response.status}`);
+        }
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            const chunk = decoder.decode(value, { stream: true });
+            rewrittenEl.value += chunk;
+            rewrittenEl.scrollTop = rewrittenEl.scrollHeight;
+        }
+      } catch(err) {
+        console.error(err);
+        rewrittenEl.value += `\n\n--- \nError during rewrite: ${err.message}`;
+      } finally {
+        proceedBtn.disabled = false;
+        proceedBtn.innerText = 'Proceed & Apply';
+      }
+    });
+    copyBtn.addEventListener('click', async () => {
+      hideError();
+      const txt = rewrittenEl.value;
+      if(!txt){ showError('Nothing to copy.'); return }
+      try {
+        await navigator.clipboard.writeText(txt);
+        alert('Copied to clipboard!');
+      } catch(e) {
+        showError('Copy failed. Please select the text manually (Ctrl+C).');
+      }
+    });
+    startOverBtn.addEventListener('click', resetAll);
+    setTimeout(() => {
+        document.getElementById('welcome').style.transform='translateY(-6px)';
+    }, 800);
+  </script>
+</body>
+</html>
