@@ -1,0 +1,261 @@
+# app.py — Final version with all integrations and new branding
+
+import os
+import time
+import json
+import logging
+import traceback
+import re
+from io import BytesIO
+from typing import Optional, Iterator
+from flask import Flask, render_template, request, jsonify, g, Response, stream_with_context
+from werkzeug.utils import secure_filename
+import requests
+
+# ------------------ CONFIG ------------------
+# Load secrets from environment variables for security, with fallbacks for local testing
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "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")
+NGROK_AUTH_TOKEN = os.getenv("NGROK_AUTH_TOKEN", "2c8Mm5ZO6mZGwGzFXcRNxxQckrq_7weC53dix8zNtpChHxCVZ")
+
+# Make model and other settings easily configurable
+GROQ_MODEL = "llama3-70b-8192"
+REQUEST_TIMEOUT = 30 # seconds
+
+ALLOWED_EXTENSIONS = {"pdf", "docx", "txt"}
+MAX_CONTENT_LENGTH = 8 * 1024 * 1024 # 8MB
+MAX_RESUME_CHARS = 12000
+
+# Optional library checks
+try:
+    import pdfplumber
+except ImportError:
+    pdfplumber = None
+
+try:
+    import docx
+except ImportError:
+    docx = None
+
+app = Flask(__name__, static_folder="static", template_folder="templates")
+app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+_rate_store = {}
+RATE_LIMIT_WINDOW = 60
+RATE_LIMIT_MAX = 20
+
+# ------------------ Utility Functions ------------------
+def get_client_ip():
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.remote_addr or "unknown"
+
+def check_rate_limit(ip: str) -> Optional[str]:
+    now = time.time()
+    arr = _rate_store.get(ip, [])
+    arr = [t for t in arr if now - t < RATE_LIMIT_WINDOW]
+    if len(arr) >= RATE_LIMIT_MAX:
+        return f"Rate limit exceeded: max {RATE_LIMIT_MAX} requests per {RATE_LIMIT_WINDOW} seconds."
+    arr.append(now)
+    _rate_store[ip] = arr
+    return None
+
+def allowed_file(filename: str) -> bool:
+    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def extract_text_from_pdf_bytes(data: bytes) -> str:
+    if not pdfplumber:
+        raise RuntimeError("PDF processing is not available. Please install 'pdfplumber'.")
+    text_parts = []
+    with pdfplumber.open(BytesIO(data)) as pdf:
+        for page in pdf.pages:
+            text_parts.append(page.extract_text() or "")
+    return "\n".join(text_parts)
+
+def extract_text_from_docx_bytes(data: bytes) -> str:
+    if not docx:
+        raise RuntimeError("DOCX processing is not available. Please install 'python-docx'.")
+    document = docx.Document(BytesIO(data))
+    return "\n".join(p.text for p in document.paragraphs)
+
+def extract_text_from_fileobj(file_storage) -> str:
+    filename = secure_filename(file_storage.filename or "")
+    ext = filename.rsplit(".", 1)[1].lower()
+    data = file_storage.read()
+    if ext == "pdf":
+        return extract_text_from_pdf_bytes(data)
+    if ext == "docx":
+        return extract_text_from_docx_bytes(data)
+    for enc in ("utf-8", "latin-1", "utf-16"):
+        try:
+             return data.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    raise ValueError("Could not decode the text file. Please ensure it is saved as UTF-8.")
+
+def truncate_resume(text: str) -> str:
+    if len(text) <= MAX_RESUME_CHARS:
+        return text
+    truncated = text[:MAX_RESUME_CHARS]
+    last_nl = truncated.rfind("\n")
+    if last_nl > int(MAX_RESUME_CHARS * 0.6):
+        truncated = truncated[:last_nl]
+    return truncated + "\n\n[TRUNCATED]\n"
+
+def sanitize_model_json(content: str) -> dict:
+    try:
+        start_index = content.find('{')
+        end_index = content.rfind('}') + 1
+        if start_index == -1 or end_index == 0:
+            logger.error(f"Could not find a JSON object in the content: {content}")
+            return {"error": "AI response did not contain a valid JSON object.", "raw": content}
+        json_str = content[start_index:end_index]
+        return json.loads(json_str)
+    except json.JSONDecodeError as e:
+        logger.warning(f"Initial JSON parse failed: {e}. Attempting to fix common errors...")
+        try:
+            json_str_fixed = re.sub(r',\s*([}\]])', r'\1', json_str)
+            return json.loads(json_str_fixed)
+        except json.JSONDecodeError as e_fixed:
+            logger.error(f"Failed to decode JSON even after fixing. Raw slice: '{json_str}'. Error: {e_fixed}")
+            return {"error": "Failed to parse the AI's response format.", "raw": content}
+    except Exception as ex:
+        logger.error(f"An unexpected error occurred in sanitize_model_json: {ex}")
+        return {"error": "An unexpected error occurred while cleaning the AI response.", "raw": content}
+
+def build_analysis_prompt(job_desc: str, resume_text: str) -> str:
+    return (
+        "You are an expert resume reviewer and ATS specialist.\n"
+        "Given the job description and the candidate's resume, perform:\n"
+        "1) ATS score 0-100 with short justification.\n"
+        "2) Top 8 actionable recommendations.\n"
+        "3) Keywords from job description.\n\n"
+        f"Job Description:\n{job_desc}\n\nResume Text:\n{resume_text}\n\n"
+        "Return valid JSON: {score, justification, recommendations[], keywords[]}."
+    )
+
+def build_rewrite_prompt(job_desc: str, resume_text: str, recommendations: list) -> str:
+    recs_text = "\n".join(f"- {r}" for r in recommendations)
+    return (
+        "You are an expert resume writer.\n"
+        "Rewrite the resume to maximize ATS match truthfully.\n"
+        "- Keep plain text with headings: SUMMARY, EXPERIENCE, EDUCATION, SKILLS, PROJECTS.\n"
+        f"- Apply recommendations:\n{recs_text}\n\n"
+        f"Job Description:\n{job_desc}\n\nResume Text:\n{resume_text}"
+    )
+
+def call_groq_api(prompt: str, stream: bool = False) -> Iterator[str] | str:
+    headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+    payload = {
+        "model": GROQ_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 4096,
+        "temperature": 0.1,
+        "stream": stream
+    }
+    try:
+        r = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers=headers,
+            json=payload,
+            timeout=REQUEST_TIMEOUT,
+            stream=stream
+        )
+        r.raise_for_status()
+        if stream:
+            def stream_generator():
+                for chunk in r.iter_lines():
+                    if chunk:
+                        decoded_chunk = chunk.decode('utf-8')
+                        if decoded_chunk.startswith('data: '):
+                            json_str = decoded_chunk[len('data: '):]
+                            if json_str.strip() == '[DONE]':
+                                continue
+                            try:
+                                data = json.loads(json_str)
+                                content = data['choices'][0]['delta'].get('content', '')
+                                if content:
+                                    yield content
+                            except json.JSONDecodeError:
+                                continue
+            return stream_generator()
+        else:
+            return r.json()["choices"][0]["message"]["content"]
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Groq API request failed: {e}")
+        raise RuntimeError(f"Could not connect to Groq API: {e}")
+
+# ------------------ Routes ------------------
+@app.before_request
+def before_request():
+    if "gsk_" not in GROQ_API_KEY:
+        g.show_key_warning = True
+    else:
+        g.show_key_warning = False
+
+    if request.path.startswith('/api/'):
+        ip = get_client_ip()
+        err = check_rate_limit(ip)
+        if err:
+            return jsonify({"error": err}), 429
+        g.client_ip = ip
+
+@app.route("/")
+def index():
+    return render_template("index.html", show_key_warning=g.get('show_key_warning', False))
+
+@app.route("/api/analyze", methods=["POST"])
+def analyze():
+    job_desc = request.form.get("job_desc", "").strip()
+    if not job_desc:
+        return jsonify({"error": "Job description is required"}), 400
+    if "resume_file" not in request.files:
+        return jsonify({"error": "Resume file is required"}), 400
+    file = request.files["resume_file"]
+    if not file or not allowed_file(file.filename):
+        return jsonify({"error": "Invalid or missing file. Allowed types: PDF, DOCX, TXT"}), 400
+    try:
+        resume_text = truncate_resume(extract_text_from_fileobj(file))
+    except Exception as e:
+        logger.error(f"File extraction failed: {traceback.format_exc()}")
+        return jsonify({"error": str(e)}), 500
+    try:
+        prompt = build_analysis_prompt(job_desc, resume_text)
+        raw_resp = call_groq_api(prompt, stream=False)
+        parsed = sanitize_model_json(raw_resp)
+        if "error" in parsed:
+            return jsonify({"error": parsed["error"], "raw": parsed.get("raw")}), 500
+        return jsonify({"analysis": parsed, "resume_text": resume_text})
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 502
+    except Exception:
+        logger.error(f"Analysis failed: {traceback.format_exc()}")
+        return jsonify({"error": "An unexpected error occurred during analysis."}), 500
+
+@app.route("/api/rewrite", methods=["POST"])
+def rewrite():
+    data = request.json or {}
+    job_desc = data.get("job_desc", "").strip()
+    resume_text = data.get("resume_text", "").strip()
+    recommendations = data.get("recommendations", [])
+    if not job_desc or not resume_text:
+        return jsonify({"error": "Job description and resume text are required"}), 400
+    resume_text = truncate_resume(resume_text)
+    try:
+        prompt = build_rewrite_prompt(job_desc, resume_text, recommendations)
+        stream_generator = call_groq_api(prompt, stream=True)
+        return Response(stream_with_context(stream_generator), content_type='text/plain')
+    except RuntimeError as e:
+        return Response(f"Error: {e}", status=502, content_type='text/plain')
+    except Exception:
+        logger.error(f"Rewrite failed: {traceback.format_exc()}")
+        return Response("Error: An unexpected error occurred during rewrite.", status=500, content_type='text/plain')
+
+# ------------------ NGROK TUNNEL (Kept for local testing) ------------------
+if __name__ == "__main__":
+    # The ngrok part is removed from the Render-ready version, 
+    # but you can keep it for local testing if you have ngrok installed.
+    app.run(port=5000, debug=True)
